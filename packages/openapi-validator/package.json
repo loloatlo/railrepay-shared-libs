@@ -1,0 +1,45 @@
+{
+  "name": "@railrepay/openapi-validator",
+  "version": "1.0.0",
+  "description": "OpenAPI 3.0 request/response validation middleware for RailRepay microservices",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "openapi",
+    "validation",
+    "express",
+    "middleware",
+    "railrepay"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "express-openapi-validator": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.11.5",
+    "express": "^5.1.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.1"
+  },
+  "peerDependencies": {
+    "@railrepay/winston-logger": "^1.0.0",
+    "express": "^4.0.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@railrepay/winston-logger": {
+      "optional": true
+    }
+  }
+}
