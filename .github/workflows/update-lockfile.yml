@@ -52,7 +52,5 @@ jobs:
             exit 0
           fi
           git add package-lock.json
-          git commit -m "chore: regenerate root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+          git commit -m "chore: regenerate root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
           git push origin HEAD:main
