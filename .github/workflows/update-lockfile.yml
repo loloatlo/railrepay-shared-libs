@@ -1,0 +1,58 @@
+# =============================================================================
+# RailRepay shared-libs — update-lockfile (added at BL-367 / APPCORE-001a)
+# =============================================================================
+# Manual (workflow_dispatch) workflow that regenerates the root
+# package-lock.json on the ubuntu-latest CI runner and commits it back to
+# main. CH-141: lockfiles must be generated on the runner, never on the
+# (Windows, npm-blocked) dev machine.
+#
+# Why this exists: publish.yml's jobs use `npm ci`, which requires
+# package-lock.json to be in sync with every workspace's package.json. The
+# committed lockfile predates packages/app-core, so `npm ci` would fail there
+# until this workflow runs once and commits the regenerated lockfile.
+# (ci.yml's app-core-tests job sidesteps this today by using `npm install`
+# instead of `npm ci` — see the note in ci.yml — but publish.yml intentionally
+# keeps `npm ci` for reproducible publishes, so the lockfile itself must be
+# fixed rather than the install command relaxed there.)
+#
+# Run manually via: gh workflow run update-lockfile.yml
+# =============================================================================
+
+name: update-lockfile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Regenerate root package-lock.json
+        run: npm install
+
+      - name: Commit updated lockfile (if changed)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already in sync — nothing to commit"
+            exit 0
+          fi
+          git add package-lock.json
+          git commit -m "chore: regenerate root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+          git push origin HEAD:main
