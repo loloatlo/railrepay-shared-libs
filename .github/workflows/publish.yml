@@ -1,13 +1,24 @@
 name: Publish to npm
 
+# NOTE (BL-367 / APPCORE-001a): 'app-core-v*' added alongside the pre-existing
+# 'v*' pattern so a scoped tag (e.g. app-core-v1.0.0) can publish ONLY
+# @railrepay/app-core without re-publishing every other workspace. A tag
+# starting with 'app-core-v' does not match the 'v*' glob (glob matches the
+# whole ref name, and 'app-core-v1.0.0' does not start with the letter 'v'),
+# so the two patterns are naturally disjoint — the `if:` guards below are a
+# belt-and-braces safeguard, not a workaround for overlap.
 on:
   push:
     tags:
       - 'v*'
+      - 'app-core-v*'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
   publish:
+    # Existing "publish everything" job — unchanged behavior, now explicitly
+    # scoped away from app-core-v* tags so it never double-publishes app-core.
+    if: ${{ !startsWith(github.ref_name, 'app-core-v') }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -32,5 +43,37 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --workspaces --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-app-core:
+    # Scoped job (BL-367 / APPCORE-001a): fires ONLY for app-core-v* tags and
+    # publishes ONLY @railrepay/app-core. The actual @railrepay/app-core@1.0.0
+    # publish (tag push) is Moykle's US-5 — this job just makes the path ready.
+    if: ${{ startsWith(github.ref_name, 'app-core-v') }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write  # Required for npm provenance
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build @railrepay/app-core
+        run: npm run build --workspace=@railrepay/app-core
+
+      - name: Publish @railrepay/app-core to npm
+        run: npm publish --workspace=@railrepay/app-core --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
