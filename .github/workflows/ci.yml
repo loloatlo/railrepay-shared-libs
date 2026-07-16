@@ -43,6 +43,15 @@ jobs:
       - name: Install dependencies (npm install — see CH-141 note above)
         run: npm install
 
+      # PROPOSED addition (Blake, US-3 GREEN, BL-367 APPCORE-001a) — flagged for
+      # Jessie's review at US-4, not folded silently into the GREEN commit.
+      # Exercises `tsc` (the package's `build` script) in CI per CLAUDE.md §6.3
+      # ("Blake runs `npm run build` before commit to catch TypeScript errors
+      # vitest may miss") — this dev machine is npm-blocked so `tsc` cannot be
+      # run locally; this step is the only place it runs before publish.
+      - name: Build @railrepay/app-core (tsc)
+        run: npm run build --workspace=@railrepay/app-core
+
       - name: Run @railrepay/app-core tests with coverage
         run: npm run test:coverage --workspace=@railrepay/app-core
 
