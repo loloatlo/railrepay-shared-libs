@@ -1,0 +1,52 @@
+{
+  "name": "@railrepay/app-core",
+  "version": "1.0.0",
+  "description": "Platform-agnostic client core for RailRepay apps — zod schemas (check-delay/login/ticket-upload), bff-client, check-delay-payload builder, and the zustand auth-store. Consumed by web-app-pwa and the Expo app (ADR-033).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "railrepay",
+    "app-core",
+    "zod",
+    "zustand",
+    "bff-client",
+    "platform-agnostic"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "zod": "^3.22.0",
+    "zustand": "^4.5.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@testing-library/react": "^14.2.1",
+    "@types/node": "^20.10.6",
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "@vitest/coverage-v8": "^1.6.1",
+    "jsdom": "^24.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.6.1"
+  }
+}

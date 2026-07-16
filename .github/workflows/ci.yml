@@ -1,0 +1,67 @@
+# =============================================================================
+# RailRepay shared-libs — CI (added at BL-367 / APPCORE-001a, 2026-07-16)
+# =============================================================================
+# Runs on every push/PR. Two gates:
+#   1. app-core-tests        — Vitest run WITH coverage (>=80/80/80/75, ADR-014)
+#                              for @railrepay/app-core. This is the RED signal
+#                              during Jessie US-2 (tests fail on unresolved
+#                              `../src/*` imports until Blake's US-3 GREEN).
+#   2. platform-agnostic-gate — AC-3: packages/app-core/src must contain no
+#                              next / react-dom / react-native / expo imports and
+#                              no DOM-global property access. Fails the build if any
+#                              appear.
+#
+# NOTE (CH-141 / npm-blocked dev machine): install uses `npm install`, NOT
+# `npm ci`, so the ubuntu runner resolves dependencies fresh from package.json.
+# The committed root package-lock.json predates app-core and is intentionally not
+# regenerated on the (Windows) dev machine — lockfiles must come from the runner.
+# =============================================================================
+
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app-core-tests:
+    name: app-core tests + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (npm install — see CH-141 note above)
+        run: npm install
+
+      - name: Run @railrepay/app-core tests with coverage
+        run: npm run test:coverage --workspace=@railrepay/app-core
+
+  platform-agnostic-gate:
+    name: platform-agnostic gate (AC-3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert no platform-specific imports / DOM globals in app-core/src
+        run: |
+          set -euo pipefail
+          # Forbidden: imports of next / react-dom / react-native / expo(-*) / @expo,
+          # and DOM-global property access (window. document. localStorage. etc.).
+          # Calibrated to NOT trip on comments (e.g. the "NO localStorage" note in
+          # auth-store.ts has no trailing dot).
+          PATTERN="(from|require\()[[:space:]]*\(?['\"](next|react-dom|react-native|expo|@expo)|\b(window|document|localStorage|sessionStorage|navigator)\."
+          if grep -rnE "$PATTERN" packages/app-core/src --include='*.ts' --include='*.tsx'; then
+            echo "::error::AC-3 violation — platform-specific reference found in packages/app-core/src"
+            exit 1
+          fi
+          echo "platform-agnostic gate passed — packages/app-core/src is clean"
