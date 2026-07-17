@@ -42,6 +42,27 @@ jobs:
       - name: Regenerate root package-lock.json
         run: npm install
 
+      - name: Diagnostic — inspect lockfile + workspace resolution (temporary, BL-367 APPCORE-001a)
+        run: |
+          set +e
+          echo "--- npm / node versions ---"
+          npm --version
+          node --version
+          echo "--- workspaces recognized by npm ---"
+          npm ls --workspaces --depth=0 2>&1
+          echo "--- grep for app-core / zod / zustand in package-lock.json ---"
+          grep -c "packages/app-core" package-lock.json || echo "0 (not found)"
+          grep -c '"zod"' package-lock.json || echo "0 (not found)"
+          grep -c '"zustand"' package-lock.json || echo "0 (not found)"
+          echo "--- git status ---"
+          git status --short
+          echo "--- git diff stat ---"
+          git diff --stat -- package-lock.json
+          echo "--- npm ci dry check (verifies package.json/lockfile parity; does not persist changes) ---"
+          rm -rf node_modules packages/*/node_modules
+          npm ci
+          echo "NPM_CI_EXIT_CODE=$?"
+
       - name: Commit updated lockfile (if changed)
         run: |
           set -euo pipefail
