@@ -1,19 +1,25 @@
 # =============================================================================
 # RailRepay shared-libs — update-lockfile (added at BL-367 / APPCORE-001a)
 # =============================================================================
-# Manual (workflow_dispatch) workflow that regenerates the root
-# package-lock.json on the ubuntu-latest CI runner and commits it back to
-# main. CH-141: lockfiles must be generated on the runner, never on the
-# (Windows, npm-blocked) dev machine.
+# Manual (workflow_dispatch) workflow that generates the root package-lock.json
+# on the ubuntu-latest CI runner and commits it back to main. CH-141: lockfiles
+# must be generated on the runner, never on the (Windows, npm-blocked) dev
+# machine.
 #
-# Why this exists: publish.yml's jobs use `npm ci`, which requires
-# package-lock.json to be in sync with every workspace's package.json. The
-# committed lockfile predates packages/app-core, so `npm ci` would fail there
-# until this workflow runs once and commits the regenerated lockfile.
-# (ci.yml's app-core-tests job sidesteps this today by using `npm install`
-# instead of `npm ci` — see the note in ci.yml — but publish.yml intentionally
-# keeps `npm ci` for reproducible publishes, so the lockfile itself must be
-# fixed rather than the install command relaxed there.)
+# ROOT CAUSE (found via a temporary diagnostic step, since removed —
+# BL-367 APPCORE-001a): package-lock.json was listed in .gitignore and had
+# NEVER been committed at all. It wasn't "stale relative to app-core" as
+# originally assumed — it simply didn't exist in the repo. Every checkout
+# started with no lockfile; `npm install` on the runner always regenerated
+# one correctly (confirmed via `npm ls --workspaces` resolving
+# @railrepay/app-core -> zod/zustand correctly, and `npm ci` succeeding after
+# a clean node_modules wipe within the same job) — but `git diff --quiet` on
+# an untracked path always reports "no differences" regardless of content
+# (git diff only compares tracked files), so the old commit-detection logic
+# silently no-op'd forever. Fixed by: (1) removing package-lock.json from
+# .gitignore, (2) staging before diffing here so a first-time add is detected
+# as a real change instead of being invisible to `git diff` on an untracked
+# path.
 #
 # Run manually via: gh workflow run update-lockfile.yml
 # =============================================================================
@@ -39,39 +45,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Regenerate root package-lock.json
+      - name: Generate root package-lock.json
         run: npm install
 
-      - name: Diagnostic — inspect lockfile + workspace resolution (temporary, BL-367 APPCORE-001a)
-        run: |
-          set +e
-          echo "--- npm / node versions ---"
-          npm --version
-          node --version
-          echo "--- workspaces recognized by npm ---"
-          npm ls --workspaces --depth=0 2>&1
-          echo "--- grep for app-core / zod / zustand in package-lock.json ---"
-          grep -c "packages/app-core" package-lock.json || echo "0 (not found)"
-          grep -c '"zod"' package-lock.json || echo "0 (not found)"
-          grep -c '"zustand"' package-lock.json || echo "0 (not found)"
-          echo "--- git status ---"
-          git status --short
-          echo "--- git diff stat ---"
-          git diff --stat -- package-lock.json
-          echo "--- npm ci dry check (verifies package.json/lockfile parity; does not persist changes) ---"
-          rm -rf node_modules packages/*/node_modules
-          npm ci
-          echo "NPM_CI_EXIT_CODE=$?"
-
-      - name: Commit updated lockfile (if changed)
+      - name: Commit lockfile (if changed or newly added)
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- package-lock.json; then
+          git add package-lock.json
+          if git diff --cached --quiet -- package-lock.json; then
             echo "package-lock.json already in sync — nothing to commit"
             exit 0
           fi
-          git add package-lock.json
-          git commit -m "chore: regenerate root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+          git commit -m "chore: commit root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
           git push origin HEAD:main
