@@ -60,3 +60,16 @@ jobs:
           fi
           git commit -m "chore: commit root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
           git push origin HEAD:main
+
+      # SOP-012 L1 (BL-379, opportunistic slice at BL-385/BL-386 TD-4, 2026-07-19):
+      # this job pushes commits authored with GITHUB_TOKEN, which do not
+      # re-trigger the push-triggered secret-scan.yml workflow (GitHub's
+      # anti-recursion rule), so the bot commit above would otherwise never
+      # be gitleaks-scanned. Run gitleaks inline, in this same job, against
+      # whatever is now checked out (i.e. including the commit just pushed)
+      # — failing this job on a hit, same as secret-scan.yml's gate.
+      - name: Secret scan the resulting commit (SOP-012 L1)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
