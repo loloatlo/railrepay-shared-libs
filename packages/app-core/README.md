@@ -31,7 +31,55 @@ npm run test --workspace=@railrepay/app-core
 npm run test:coverage --workspace=@railrepay/app-core
 ```
 
-## Known RN caveats (tracked as TD items at APPCORE-001c)
+## React Native usage
 
-- `bff-client.ts` uses a relative default `baseUrl` (`''`, BL-273 invariant) — RN needs an injectable absolute `baseUrl`.
-- `bff-client.ts` uses `crypto.randomUUID` — RN needs an `expo-crypto` polyfill.
+Resolved at BL-385 (injectable `baseUrl`) + BL-386 (`crypto.randomUUID` guard),
+Technical Debt workflow TD-2 — these were previously tracked as "Known RN
+caveats" pending at APPCORE-001c; both are now handled by `bff-client.ts`
+itself rather than requiring RN-side workarounds.
+
+### 1. Polyfill `crypto.randomUUID` with `expo-crypto`
+
+`bff-client.ts` calls `crypto.randomUUID()` to generate the `X-Correlation-ID`
+header (ADR-002) on every request. This is a standard Web Crypto API global in
+browsers, Node 19+, and Next.js, but React Native does not provide it natively.
+Without a polyfill, every `@railrepay/app-core` client call throws a
+descriptive error naming `expo-crypto` and this section — install
+[`expo-crypto`](https://docs.expo.dev/versions/latest/sdk/crypto/) and polyfill
+`globalThis.crypto.randomUUID` once, near your app's entry point, before any
+`@railrepay/app-core` call:
+
+```ts
+// entry-shim.ts — import this before anything that uses @railrepay/app-core
+import * as ExpoCrypto from 'expo-crypto';
+
+if (typeof globalThis.crypto === 'undefined') {
+  // @ts-expect-error — RN has no global `crypto` object at all
+  globalThis.crypto = {};
+}
+if (typeof globalThis.crypto.randomUUID !== 'function') {
+  globalThis.crypto.randomUUID = ExpoCrypto.randomUUID as typeof crypto.randomUUID;
+}
+```
+
+### 2. Configure an absolute `baseUrl`
+
+On the web PWA, Next.js `rewrites()` proxies `/api/*` to the BFF same-origin,
+so the default relative `baseUrl` (`''`, BL-273 invariant) works without
+configuration. React Native has no such same-origin proxy, so RN apps must
+configure an absolute base URL once at startup:
+
+```ts
+import { configureBffClient } from '@railrepay/app-core';
+
+configureBffClient({ baseUrl: 'https://bff.railrepay.example.com' });
+```
+
+Every client call (`startOtp`, `verifyOtp`, `uploadTicket`, `checkDelay`,
+`getMe`) is then joined against this base via the `joinUrl` primitive
+(`joinUrl(base, path)` — exactly one trailing slash is stripped from `base`;
+`path` must be `/`-prefixed). Re-configuring is last-wins; call
+`configureBffClient({ baseUrl: '' })` to reset to the relative default.
+`getMe`'s own per-call `baseUrl` parameter (used by the PWA's Next.js
+middleware) still takes precedence over `configureBffClient` when both are
+given.

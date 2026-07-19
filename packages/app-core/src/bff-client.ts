@@ -3,6 +3,7 @@
  *
  * Story   : RAILREPAY-APP-LOGIN-001
  * Phase   : US-3 (Blake — Implementation)
+ * TD      : BL-385 (injectable baseUrl) + BL-386 (randomUUID guard) — Phase TD-2
  *
  * AC-3: startOtp  → POST /api/auth/otp/start
  * AC-4: verifyOtp → POST /api/auth/otp/verify
@@ -10,6 +11,16 @@
  *
  * All requests use credentials: 'include' so the browser sends/receives the
  * rr_session HttpOnly cookie. X-Correlation-ID header added per ADR-002.
+ *
+ * BL-385: All five client calls route through a module-level configurable
+ * base URL (see configureBffClient / joinUrl below). Default/unconfigured
+ * behaviour is byte-identical to 1.0.0 — relative URLs (BL-273 invariant).
+ * React Native (which has no same-origin rewrite proxy) configures an
+ * absolute baseUrl via configureBffClient — see README "React Native usage".
+ *
+ * BL-386: crypto.randomUUID() is guarded — environments without it (React
+ * Native without the expo-crypto polyfill) get a descriptive error instead
+ * of a raw TypeError. See README "React Native usage".
  *
  * ADR references:
  *   ADR-002 — Correlation IDs
@@ -76,21 +87,76 @@ export interface VerifyOtpParams {
   code: string;
 }
 
+// ─── Configurable base URL (BL-385) ───────────────────────────────────────────
+
+/**
+ * Configuration accepted by configureBffClient. `baseUrl` is optional so
+ * that `configureBffClient({})` is a valid no-op call (AC-4).
+ */
+export interface BffClientConfig {
+  baseUrl?: string;
+}
+
+// Module-level state. Defaults to '' (relative) — BL-273 invariant: on the
+// web PWA, Next.js rewrites() proxies /api/* to the BFF same-origin, so
+// relative URLs keep the rr_session cookie scoped correctly. Reading an env
+// var here (e.g. NEXT_PUBLIC_BFF_BASE_URL) would inline an absolute URL into
+// the client bundle and break that proxy — see BL-273 deployed-bundle
+// diagnosis 2026-05-12. React Native has no such proxy, so RN callers set an
+// absolute baseUrl explicitly via configureBffClient (README "React Native
+// usage").
+let configuredBaseUrl = '';
+
+/**
+ * BL-385 AC-2/AC-4: Configure the base URL every client call is joined
+ * against. Last-wins: each call replaces the previous value. `{baseUrl: ''}`
+ * resets to the relative (web PWA) default. `{}` — baseUrl absent — is a
+ * no-op that leaves the current configuration unchanged, so partial config
+ * objects can be passed without accidentally resetting state.
+ */
+export function configureBffClient(config: BffClientConfig): void {
+  if (config.baseUrl !== undefined) {
+    configuredBaseUrl = config.baseUrl;
+  }
+}
+
+/**
+ * BL-385 AC-5: Join primitive used by every client call.
+ *   - `joinUrl('', path)` returns `path` unchanged (BL-273 invariant).
+ *   - Exactly one trailing slash is stripped from a non-empty `base`.
+ *   - `path` MUST be `/`-prefixed; otherwise throws a descriptive error
+ *     (both to catch caller mistakes and because naive string concatenation
+ *     of a non-`/`-prefixed path would silently produce a malformed URL).
+ */
+export function joinUrl(base: string, path: string): string {
+  if (!path.startsWith('/')) {
+    throw new Error(`joinUrl: path must be "/"-prefixed (received "${path}")`);
+  }
+  const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  return `${normalizedBase}${path}`;
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-function getBffBaseUrl(): string {
-  // BL-273: After Next.js rewrites() proxies /api/* to BFF, all client-side
-  // fetches use relative paths (same-origin from browser's perspective).
-  // This makes the BFF's Set-Cookie come back via the PWA origin, so the
-  // rr_session cookie is correctly scoped to PWA domain and visible to the
-  // middleware's server-side getMe() forwarding.
-  //
-  // BL-273 follow-up: This MUST return '' unconditionally — reading
-  // NEXT_PUBLIC_BFF_BASE_URL would cause Next.js to inline the absolute BFF
-  // URL into the client bundle, making the browser bypass the rewrite proxy
-  // (cross-origin fetch → cookie scoped to BFF domain → middleware /me 401 →
-  // redirect to /login). See BL-273 deployed-bundle diagnosis 2026-05-12.
-  return '';
+/**
+ * BL-386 AC-2: Guard called as the first statement of every client function,
+ * before any fetch. `crypto.randomUUID` is a Web Crypto API global available
+ * in browsers, Node 19+, and Next.js — but NOT in React Native without the
+ * `expo-crypto` polyfill. Without this guard, RN callers would see a raw
+ * `TypeError: crypto.randomUUID is not a function` (or "Cannot read
+ * properties of undefined (reading 'randomUUID')" when `crypto` itself is
+ * absent) with no indication of the fix. Handles both failure modes.
+ */
+function assertRandomUUIDAvailable(): void {
+  if (typeof globalThis.crypto?.randomUUID !== 'function') {
+    throw new Error(
+      'crypto.randomUUID is not available in this environment. On React ' +
+        'Native, install and configure the expo-crypto polyfill — see this ' +
+        "package's README \"React Native usage\" section — to provide " +
+        'globalThis.crypto.randomUUID before calling @railrepay/app-core ' +
+        'bff-client functions.',
+    );
+  }
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
@@ -113,8 +179,9 @@ async function handleResponse<T>(res: Response): Promise<T> {
  * POST /api/auth/otp/start
  */
 export async function startOtp(params: StartOtpParams): Promise<StartOtpResponse> {
+  assertRandomUUIDAvailable();
   const correlationId = crypto.randomUUID();
-  const res = await fetch(`${getBffBaseUrl()}/api/auth/otp/start`, {
+  const res = await fetch(joinUrl(configuredBaseUrl, '/api/auth/otp/start'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -132,8 +199,9 @@ export async function startOtp(params: StartOtpParams): Promise<StartOtpResponse
  * BFF sets rr_session cookie on the response automatically.
  */
 export async function verifyOtp(params: VerifyOtpParams): Promise<VerifyOtpResponse> {
+  assertRandomUUIDAvailable();
   const correlationId = crypto.randomUUID();
-  const res = await fetch(`${getBffBaseUrl()}/api/auth/otp/verify`, {
+  const res = await fetch(joinUrl(configuredBaseUrl, '/api/auth/otp/verify'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -182,8 +250,9 @@ export interface UploadResponse {
  * AC-3: Upload a ticket image to the BFF for OCR processing.
  * POST /api/tickets/upload
  *
- * SOP-IMPROVEMENT-006 / BL-273: Uses RELATIVE URL /api/tickets/upload.
- * getBffBaseUrl() returns '' unconditionally — do NOT prepend env vars here.
+ * SOP-IMPROVEMENT-006 / BL-273: Uses a RELATIVE URL by default —
+ * configuredBaseUrl defaults to '' and joinUrl('', path) === path — do NOT
+ * prepend env vars here (BL-385: use configureBffClient instead).
  *
  * ADR-002: X-Correlation-ID header added for observability.
  */
@@ -191,11 +260,12 @@ export async function uploadTicket(
   image: Blob,
   source: 'camera' | 'screenshot' | 'clipboard',
 ): Promise<UploadResponse> {
+  assertRandomUUIDAvailable();
   const correlationId = crypto.randomUUID();
   const formData = new FormData();
   formData.append('image', image);
   formData.append('source', source);
-  const res = await fetch(`${getBffBaseUrl()}/api/tickets/upload`, {
+  const res = await fetch(joinUrl(configuredBaseUrl, '/api/tickets/upload'), {
     method: 'POST',
     headers: {
       'X-Correlation-ID': correlationId,
@@ -220,14 +290,17 @@ import { checkDelayResponseSchema } from './schemas/check-delay';
  * malformed BFF body now throws BffParseError rather than silently returning
  * a mistyped object that causes a downstream /capture bounce.
  *
- * OQ-7: Uses a RELATIVE URL — Next.js rewrite proxy forwards to BFF.
+ * OQ-7: Uses a RELATIVE URL by default — Next.js rewrite proxy forwards to
+ * BFF; BL-385 now routes this through configuredBaseUrl/joinUrl like every
+ * other client call (previously hardcoded, unlike the other four functions).
  * ADR-002: X-Correlation-ID header for observability.
  * ADR-027: BFF owns canonical contract; parse failure = contract drift.
- * BL-273: MUST NOT use absolute BFF URL — relative only.
+ * BL-273: default remains relative-only — see configureBffClient for RN.
  */
 export async function checkDelay(params: CheckDelayRequest): Promise<CheckDelayResponse> {
+  assertRandomUUIDAvailable();
   const correlationId = crypto.randomUUID();
-  const res = await fetch('/api/journeys/check-delay', {
+  const res = await fetch(joinUrl(configuredBaseUrl, '/api/journeys/check-delay'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -270,13 +343,18 @@ export async function checkDelay(params: CheckDelayRequest): Promise<CheckDelayR
  * override the base URL to BFF_INTERNAL_URL, bypassing the rewrite proxy for
  * server-to-server calls (middleware runs on the server, not in the browser,
  * so it must call BFF directly rather than going through the /api/* rewrite).
+ *
+ * BL-385: this per-call baseUrl parameter takes precedence over
+ * configureBffClient's module-level config when both are present — the
+ * middleware's explicit BFF_INTERNAL_URL override must win.
  */
 export async function getMe(
   headers?: Record<string, string>,
   baseUrl?: string,
 ): Promise<MeResponse> {
+  assertRandomUUIDAvailable();
   const correlationId = crypto.randomUUID();
-  const url = `${baseUrl ?? getBffBaseUrl()}/api/auth/me`;
+  const url = joinUrl(baseUrl ?? configuredBaseUrl, '/api/auth/me');
   const res = await fetch(url, {
     method: 'GET',
     headers: {

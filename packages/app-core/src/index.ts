@@ -7,6 +7,11 @@
  * bff-client). Excluded from the coverage gate (vitest.config.ts) — this
  * file carries no branch logic, only re-exports.
  *
+ * v1.1.0 (BL-385 + BL-386, TD-2): bff-client also exports configureBffClient
+ * / BffClientConfig / joinUrl (injectable base URL for React Native — see
+ * package README "React Native usage"). Additive only; no existing export
+ * changed.
+ *
  * Note: `check-delay-payload.ts` and `schemas/ticket-upload.ts` each define
  * their own (differently-shaped) `ExtractedFields` type. Both source files
  * are byte-identical carries from web-app-pwa (Test Lock Rule / AC-4) where
@@ -49,6 +54,8 @@ export {
   getMe,
   uploadTicket,
   checkDelay,
+  configureBffClient,
+  joinUrl,
 } from './bff-client';
 export type {
   StartOtpResponse,
@@ -58,4 +65,5 @@ export type {
   VerifyOtpParams,
   UploadExtractedFields,
   UploadResponse,
+  BffClientConfig,
 } from './bff-client';
