@@ -21,6 +21,26 @@
 # as a real change instead of being invisible to `git diff` on an untracked
 # path.
 #
+# BL-391 Slice 1 (TD-2, 2026-07-20) — SOP-012 gate rework. Two gaps found by
+# the BL-379 AC-4 canary (recorded on BL-391):
+#   1. gitleaks' DEFAULT ruleset path-allowlists lock files, so a credential
+#      planted in package-lock.json is never flagged by a plain
+#      gitleaks-action scan of the repo (live false-negative: run
+#      29725952797). The identical key under a non-lockfile name scans RED
+#      (run 29726177651). Fix: copy package-lock.json to a NON-allowlisted
+#      temp name under $RUNNER_TEMP and scan THAT copy with `gitleaks detect
+#      --no-git` (a pinned, sha256-verified binary — same asset/version as
+#      BL-377 — not the gitleaks-action wrapper, which re-applies the default
+#      ruleset/allowlist).
+#   2. The old single "Commit lockfile" step pushed BEFORE the SOP-012 L1
+#      scan ran, so a leak would be scanned only AFTER it already reached
+#      origin. Fixed by re-sequencing: regenerate -> commit LOCAL only (no
+#      push) -> commit-scan (existing gitleaks-action, default config, repo-
+#      wide) -> lockfile-scan (new, targeted) -> push, LAST, only if a local
+#      commit was actually made. Actions' normal fail-fast behaviour means a
+#      failure in either scan step skips the push step automatically; no
+#      extra `if:` needed for that gating.
+#
 # Run manually via: gh workflow run update-lockfile.yml
 # =============================================================================
 
@@ -48,7 +68,10 @@ jobs:
       - name: Generate root package-lock.json
         run: npm install
 
-      - name: Commit lockfile (if changed or newly added)
+      # BL-391: commit LOCAL only here — no push. `changed` output lets the
+      # final push step (and only that step) skip cleanly on a no-op.
+      - name: Commit lockfile locally (if changed or newly added)
+        id: commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -56,20 +79,48 @@ jobs:
           git add package-lock.json
           if git diff --cached --quiet -- package-lock.json; then
             echo "package-lock.json already in sync — nothing to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git commit -m "chore: commit root package-lock.json for app-core (update-lockfile dispatch, CH-141, BL-367 APPCORE-001a)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-          git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # SOP-012 L1 (BL-379, opportunistic slice at BL-385/BL-386 TD-4, 2026-07-19):
-      # this job pushes commits authored with GITHUB_TOKEN, which do not
-      # re-trigger the push-triggered secret-scan.yml workflow (GitHub's
-      # anti-recursion rule), so the bot commit above would otherwise never
-      # be gitleaks-scanned. Run gitleaks inline, in this same job, against
-      # whatever is now checked out (i.e. including the commit just pushed)
-      # — failing this job on a hit, same as secret-scan.yml's gate.
-      - name: Secret scan the resulting commit (SOP-012 L1)
+      # SOP-012 L1 (BL-379) — repo-wide default-ruleset scan, now BEFORE push
+      # (BL-391 fixes the post-push ordering bug). Runs every time (cheap,
+      # idempotent) — a no-op commit still gets scanned, which is harmless.
+      - name: Commit-scan (SOP-012 L1, gitleaks-action default config)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
+
+      # BL-391: targeted lockfile scan. gitleaks' default ruleset
+      # path-allowlists files literally named package-lock.json, so the
+      # commit-scan step above CANNOT catch a leak planted there (BL-379 AC-4
+      # canary, run 29725952797). Copying it to a non-lockfile name under
+      # $RUNNER_TEMP and scanning that copy with `--no-git` (file contents
+      # only, not git history) sidesteps the allowlist. Uses a pinned,
+      # sha256-verified gitleaks binary (same v8.24.3 linux_x64 asset as
+      # BL-377) rather than the gitleaks-action wrapper, which would re-apply
+      # the same default allowlist we're trying to dodge.
+      - name: Lockfile-scan (BL-391 — dodges gitleaks' default lockfile allowlist)
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.24.3"
+          GITLEAKS_SHA256="9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
+          ASSET="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSL -o "$ASSET" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${ASSET}"
+          echo "${GITLEAKS_SHA256}  ${ASSET}" | sha256sum -c -
+          tar -xzf "$ASSET" gitleaks
+          # Non-lockfile basename is the fix — do NOT rename this back to
+          # package-lock.json, that would silently reinstate the allowlist gap.
+          cp package-lock.json "$RUNNER_TEMP/lockfile-scan-target.json"
+          ./gitleaks detect --no-git --source "$RUNNER_TEMP/lockfile-scan-target.json" --redact -v
+
+      # BL-391: push is now LAST, and only runs if a local commit was made.
+      # It is only reached at all if both scan steps above exited 0 (Actions'
+      # default fail-fast behaviour skips remaining steps on a step failure).
+      - name: Push (only if a local commit was made and both scans passed)
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin HEAD:main
